@@ -43,17 +43,14 @@ except ImportError:
 
 
 # ─────────────────────────── Config ───────────────────────────
-
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN")
 ADMIN_IDS = {
     int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()
 }
 
-# Default invite codes (used if not overridden by admin)
 DEFAULT_HOLWIN_INVITE = "WLRPSY"
 DEFAULT_REX_INVITE = "O6NVYX"
 
-# Holwin & Rex API endpoints (unchanged)
 HOLWIN_BASE = "https://www.holwin123.top"
 HOLWIN_DI = "88dd52c70e7b377527be01c39f5a0a4f"
 HOLWIN_VTOKEN = "18667bd921478af5fe5f6506865e4f8a"
@@ -81,20 +78,17 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 # ─────────────────────────── Proxy Manager ───────────────────────────
-
-# The proxy list you provided – we parse it into a list of (host, port, user, pass)
+# --------------------------------------------------------------------
+# IMPORTANT: Replace this list with your full proxy list OR use the
+# /load_proxies_file command to load proxies from a 'proxies.txt' file.
+# Format: host:port:user:password
+# --------------------------------------------------------------------
 PROXY_LINES = [
     "px023004.pointtoserver.com:10780:purevpn0s551451:9dpdlc2nfxgj",
     "px023005.pointtoserver.com:10780:purevpn0s551451:9dpdlc2nfxgj",
-    # ... (include all your proxies here – we'll keep only a few for brevity; you must paste them all)
-    # We'll put a placeholder comment and you can replace it with the full list
-    # Full list should be pasted below.
+    # ... paste all your proxies here ...
 ]
 
-# Because the list is long, we'll actually define it as a constant in the full code.
-# For the answer, we'll show the structure and instruct to paste the proxies.
-
-# We'll parse them once:
 def parse_proxy_line(line: str) -> Optional[tuple]:
     parts = line.strip().split(":")
     if len(parts) == 4:
@@ -115,14 +109,12 @@ class ProxyManager:
         self.lock = asyncio.Lock()
 
     async def get_next_proxy(self) -> Optional[str]:
-        """Returns a proxy URL in format http://user:pass@host:port, or None if no proxies."""
         if not self.proxies:
             return None
         async with self.lock:
             host, port, user, pwd = self.proxies[self.current_index]
             self.current_index = (self.current_index + 1) % len(self.proxies)
-        proxy_url = f"http://{user}:{pwd}@{host}:{port}"
-        return proxy_url
+        return f"http://{user}:{pwd}@{host}:{port}"
 
     def get_random_proxy(self) -> Optional[str]:
         if not self.proxies:
@@ -131,7 +123,6 @@ class ProxyManager:
         return f"http://{user}:{pwd}@{host}:{port}"
 
     def reload(self, new_lines: List[str]):
-        """Reload proxy list from new lines."""
         new_proxies = []
         for line in new_lines:
             parsed = parse_proxy_line(line)
@@ -144,11 +135,10 @@ class ProxyManager:
         else:
             logger.warning("No valid proxies in reload, keeping old list.")
 
-# Global proxy manager – we'll initialize with the full list later.
-PROXY_MANAGER = ProxyManager([])  # will be set after reading all proxies
+PROXY_MANAGER = ProxyManager(PROXY_LINES)
+
 
 # ─────────────────────────── DB Models ───────────────────────────
-
 class Registration(Base):
     __tablename__ = "registrations"
     id = Column(Integer, primary_key=True)
@@ -183,8 +173,7 @@ Base.metadata.create_all(engine)
 MOBILE, OTP, PASSWORD, CONFIRM = range(4)
 
 
-# ─────────────────────────── i18n ───────────────────────────
-
+# ─────────────────────────── i18n (complete set) ───────────────────────────
 STRINGS = {
     "main_title": {"en": "💎  R E F E R R A L   B O T  💎", "hi": "💎  रेफरल बॉट  💎"},
     "select_platform": {"en": "🚀 *Select your platform:*", "hi": "🚀 *अपना प्लेटफ़ॉर्म चुनें:*"},
@@ -224,22 +213,25 @@ STRINGS = {
             "❌ /cancel \\- रद्द करें"
         ),
     },
-    # ... other translations (keep as in original, we'll keep them concise)
+    "banned": {"en": "🚫 You are banned from using this bot.", "hi": "🚫 आप इस बॉट का उपयोग नहीं कर सकते।"},
+    "enter_mobile": {"en": "📱 Enter your mobile number (10-15 digits):", "hi": "📱 अपना मोबाइल नंबर दर्ज करें (10-15 अंक):"},
+    "invalid_mobile": {"en": "❌ Invalid mobile number. Please enter 10-15 digits.", "hi": "❌ अमान्य नंबर। कृपया 10-15 अंक दर्ज करें।"},
+    "lang_prompt": {"en": "🌐 Choose your language:", "hi": "🌐 अपनी भाषा चुनें:"},
+    "lang_set": {"en": "✅ Language set to English.", "hi": "✅ भाषा हिंदी में सेट की गई।"},
 }
-# We'll keep only essential; the original has many more – we'll include them all in final.
 
 def L(key: str, lang: str) -> str:
     entry = STRINGS.get(key, {})
     return entry.get(lang, entry.get("en", key))
 
-# ─────────────────────────── Markdown escaping ───────────────────────────
 
+# ─────────────────────────── Markdown escaping ───────────────────────────
 _MDV2_SPECIAL = re.compile(r'([_*\[\]()~`>#+\-=|{}.!\\])')
 def esc(text: str) -> str:
     return _MDV2_SPECIAL.sub(r'\\\1', str(text))
 
-# ─────────────────────────── Keyboards (same as original) ───────────────────────────
 
+# ─────────────────────────── Keyboards ───────────────────────────
 def main_keyboard():
     return InlineKeyboardMarkup([
         [
@@ -283,8 +275,8 @@ def language_keyboard():
         [InlineKeyboardButton("🔙 Back", callback_data="main_menu")],
     ])
 
-# ─────────────────────────── DB helpers ───────────────────────────
 
+# ─────────────────────────── DB helpers ───────────────────────────
 def db_session():
     return SessionLocal()
 
@@ -344,7 +336,7 @@ def get_all_user_ids():
         db.close()
 
 def save_registration(mobile: str, platform: str, invite: str, telegram_id: int):
-    db: Session = db_session()
+    db = db_session()
     try:
         db.add(Registration(mobile=mobile, platform=platform, invite_used=invite, telegram_id=telegram_id))
         db.commit()
@@ -395,16 +387,14 @@ def export_registrations_csv() -> io.BytesIO:
     byte_buf.name = f"registrations_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
     return byte_buf
 
-# ─────────────────────────── Dynamic Invite Codes ───────────────────────────
 
+# ─────────────────────────── Dynamic Invite Codes ───────────────────────────
 def get_invite_code(platform: str) -> str:
-    """Get the current invite code from DB or default."""
     db = db_session()
     try:
         config = db.query(BotConfig).filter(BotConfig.key == f"invite_{platform}").first()
         if config:
             return config.value
-        # else return default
         if platform == "holwin":
             return DEFAULT_HOLWIN_INVITE
         elif platform == "rex":
@@ -414,7 +404,6 @@ def get_invite_code(platform: str) -> str:
         db.close()
 
 def set_invite_code(platform: str, code: str) -> bool:
-    """Set invite code in DB. Returns True if success."""
     db = db_session()
     try:
         config = db.query(BotConfig).filter(BotConfig.key == f"invite_{platform}").first()
@@ -432,8 +421,8 @@ def set_invite_code(platform: str, code: str) -> bool:
     finally:
         db.close()
 
-# ─────────────────────────── Admin guard ───────────────────────────
 
+# ─────────────────────────── Admin guard ───────────────────────────
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
@@ -447,42 +436,23 @@ async def require_admin(update: Update) -> bool:
         return False
     return True
 
-# ─────────────────────────── API Clients with Proxy & Retry ───────────────────────────
 
+# ─────────────────────────── API Clients with Proxy & Retry ───────────────────────────
 class BaseAPIClient:
     def __init__(self, base_url: str, headers: Dict, proxy_manager: ProxyManager):
         self.base_url = base_url
         self.headers = headers
         self.proxy_manager = proxy_manager
-        self.session = None
-
-    async def __aenter__(self):
-        # We'll create a new session for each request; we'll use a temporary session inside post.
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        # no persistent session needed
-        pass
 
     async def _post_with_retry(self, path: str, payload: Dict[str, Any], retries: int = 3) -> Dict[str, Any]:
-        """POST with retry and proxy rotation."""
         url = f"{self.base_url}{path}"
         last_error = None
 
         for attempt in range(1, retries + 1):
-            proxy_url = self.proxy_manager.get_next_proxy() if self.proxy_manager else None
+            proxy_url = await self.proxy_manager.get_next_proxy() if self.proxy_manager else None
             try:
-                connector = None
-                if proxy_url:
-                    # For HTTP proxy with auth, we can use aiohttp's proxy parameter.
-                    # For HTTPS, we may need to use aiohttp-socks, but we'll assume HTTP.
-                    connector = aiohttp.TCPConnector(ssl=False)  # if SSL issues
-                else:
-                    connector = aiohttp.TCPConnector()
-
                 timeout = aiohttp.ClientTimeout(total=20)
-                async with aiohttp.ClientSession(headers=self.headers, timeout=timeout, connector=connector) as session:
-                    # Use proxy if available
+                async with aiohttp.ClientSession(headers=self.headers, timeout=timeout) as session:
                     async with session.post(url, json=payload, proxy=proxy_url) as resp:
                         try:
                             data = await resp.json(content_type=None)
@@ -493,11 +463,9 @@ class BaseAPIClient:
                         except Exception as e:
                             logger.error(f"JSON parse error (attempt {attempt}): {e}")
                             return {"code": -1, "msg": f"Invalid JSON: {str(e)}"}
-
             except aiohttp.ClientError as e:
                 last_error = e
                 logger.warning(f"Request attempt {attempt} failed with proxy {proxy_url}: {e}")
-                # continue to next retry with different proxy
             except asyncio.TimeoutError:
                 last_error = "Timeout"
                 logger.warning(f"Timeout attempt {attempt} with proxy {proxy_url}")
@@ -505,8 +473,6 @@ class BaseAPIClient:
                 last_error = e
                 logger.error(f"Unexpected error attempt {attempt}: {e}")
 
-            # If we have proxies, we can continue; else break after retries
-        # All attempts failed
         return {"code": -1, "msg": f"All retries failed: {last_error}"}
 
 class HolwinClient(BaseAPIClient):
@@ -533,15 +499,15 @@ class RexClient(BaseAPIClient):
             proxy_manager=proxy_manager
         )
 
-# ─────────────────────────── User bootstrap / ban gate ───────────────────────────
 
+# ─────────────────────────── User bootstrap / ban gate ───────────────────────────
 async def touch_user_and_check_ban(update: Update) -> Dict[str, Any]:
     user = update.effective_user
     info = get_or_create_user(user.id, user.username)
     return info
 
-# ─────────────────────────── Core handlers ───────────────────────────
 
+# ─────────────────────────── Core handlers ───────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     info = await touch_user_and_check_ban(update)
@@ -555,7 +521,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text)
         return
 
-    # Get current invite codes from DB
     holwin_invite = get_invite_code("holwin")
     rex_invite = get_invite_code("rex")
 
@@ -604,7 +569,7 @@ async def language_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    lang = q.data.split("_")[1]  # setlang_en / setlang_hi
+    lang = q.data.split("_")[1]
     set_user_language(update.effective_user.id, lang)
     await q.edit_message_text(L("lang_set", lang), reply_markup=back_keyboard())
 
@@ -685,8 +650,8 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=back_keyboard(),
         )
 
-# ─────────────────────────── Support / FAQ (kept as original) ───────────────────────────
 
+# ─────────────────────────── Support / FAQ ───────────────────────────
 FAQ = [
     (("otp", "code not"), "If OTP isn't arriving: check the number is correct, wait 60s, then use 🔄 Resend OTP."),
     (("password", "pwd"), "Password must be 6+ characters, or type `skip` to use a default one."),
@@ -697,18 +662,18 @@ FAQ = [
 
 async def support_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await touch_user_and_check_ban(update)
-    text = (
-        "🆘 *Quick Support*\n\n"
-        "Type a keyword \\(e\\.g\\. `otp`, `password`, `error`\\) after /support, "
-        "or just ask your question as a normal message and I'll try to match it to an FAQ\\."
-    )
-    args = context.args if hasattr(context, "args") else []
-    if args:
-        answer = match_faq(" ".join(args))
-        if answer:
-            text = f"🆘 {esc(answer)}"
-        else:
-            text = "🤔 No FAQ match found\\."
+    # Extract args safely: from command or empty for button press
+    args = context.args if hasattr(context, 'args') and context.args else []
+    query_text = " ".join(args) if args else ""
+    if query_text:
+        answer = match_faq(query_text)
+        text = f"🆘 {esc(answer)}" if answer else "🤔 No FAQ match found\\."
+    else:
+        text = (
+            "🆘 *Quick Support*\n\n"
+            "Type a keyword \\(e\\.g\\. `otp`, `password`, `error`\\) after /support, "
+            "or just ask your question as a normal message and I'll try to match it to an FAQ\\."
+        )
     target = update.callback_query.message if update.callback_query else update.message
     if update.callback_query:
         await update.callback_query.answer()
@@ -727,8 +692,8 @@ async def freeform_text_fallback(update: Update, context: ContextTypes.DEFAULT_T
     if answer:
         await update.message.reply_text(f"🆘 {esc(answer)}", parse_mode=ParseMode.MARKDOWN_V2, reply_markup=back_keyboard())
 
-# ─────────────────────────── Admin: invite management ───────────────────────────
 
+# ─────────────────────────── Admin: invite management ───────────────────────────
 async def set_invite_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update):
         return
@@ -765,22 +730,16 @@ async def reset_invites_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_invite_code("rex", DEFAULT_REX_INVITE)
     await update.message.reply_text("✅ Invite codes reset to defaults.")
 
-# ─────────────────────────── Admin: reload proxies ───────────────────────────
 
+# ─────────────────────────── Admin: reload proxies ───────────────────────────
 async def reload_proxies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update):
         return
-    # We'll assume the proxy list is hardcoded; admin can also paste new lines in args?
-    # For simplicity, we'll just reload from the original list (hardcoded).
-    # But we can also accept a file? Let's implement a simple version: accept new proxy lines as args.
-    # Or we can have a file proxies.txt. We'll implement reading from a file if exists.
-    # For now, we'll just tell the admin to edit the code and restart.
     await update.message.reply_text(
         "To reload proxies, edit the PROXY_LINES list in the source and restart the bot.\n"
-        "Alternatively, place a 'proxies.txt' file with one proxy per line and use /reload_proxies_file."
+        "Alternatively, place a 'proxies.txt' file with one proxy per line and use /load_proxies_file."
     )
 
-# We'll also add a command to load from a file:
 async def load_proxies_file_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update):
         return
@@ -795,8 +754,8 @@ async def load_proxies_file_cmd(update: Update, context: ContextTypes.DEFAULT_TY
     PROXY_MANAGER.reload(lines)
     await update.message.reply_text(f"✅ Reloaded {len(PROXY_MANAGER.proxies)} proxies from file.")
 
-# ─────────────────────────── Admin: status ───────────────────────────
 
+# ─────────────────────────── Admin: status ───────────────────────────
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update):
         return
@@ -812,8 +771,8 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN_V2
     )
 
-# ─────────────────────────── Admin: broadcast / users / export (keep as original) ───────────────────────────
 
+# ─────────────────────────── Admin: broadcast / users / export ───────────────────────────
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update): return
     if not context.args:
@@ -861,8 +820,8 @@ async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bio = export_registrations_csv()
     await update.message.reply_document(document=InputFile(bio, filename=bio.name), caption="📄 Registrations export")
 
-# ─────────────────────────── Scheduled summaries ───────────────────────────
 
+# ─────────────────────────── Scheduled summaries ───────────────────────────
 async def send_summary(context: ContextTypes.DEFAULT_TYPE, label: str):
     total, holwin, rex, _ = get_stats()
     text = (
@@ -883,8 +842,8 @@ async def daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
 async def weekly_summary_job(context: ContextTypes.DEFAULT_TYPE):
     await send_summary(context, "Weekly")
 
-# ─────────────────────────── Registration flow ───────────────────────────
 
+# ─────────────────────────── Registration flow ───────────────────────────
 async def platform_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -916,7 +875,6 @@ async def mobile_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["mobile"] = mobile
     platform = context.user_data["platform"]
 
-    # Use API client with proxy
     try:
         if platform == "holwin":
             client = HolwinClient(PROXY_MANAGER)
@@ -1082,11 +1040,12 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
     return ConversationHandler.END
 
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Unhandled exception", exc_info=context.error)
 
-# ─────────────────────────── Wiring ───────────────────────────
 
+# ─────────────────────────── Wiring ───────────────────────────
 conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(platform_selected, pattern="^platform_(holwin|rex)$")],
     states={
@@ -1115,7 +1074,6 @@ conv_handler = ConversationHandler(
     allow_reentry=True,
 )
 
-# ─────────────────────────── Main ───────────────────────────
 
 def main():
     if not BOT_TOKEN or BOT_TOKEN.count(":") != 1:
@@ -1123,18 +1081,8 @@ def main():
     if not ADMIN_IDS:
         logger.warning("No ADMIN_IDS configured - admin commands will be unusable.")
 
-    # Initialize proxy manager with the full proxy list.
-    # We'll put the full list here (we'll include all 60+ proxies in the final code; but for brevity we show a placeholder)
-    # The actual full list will be provided in the answer text.
-    proxy_lines = [
-        # PASTE YOUR FULL PROXY LIST HERE
-        # Example:
-        # "px023004.pointtoserver.com:10780:purevpn0s551451:9dpdlc2nfxgj",
-        # ...
-    ]
-    # If you have a proxies.txt file, it will be loaded dynamically via command.
     global PROXY_MANAGER
-    PROXY_MANAGER = ProxyManager(proxy_lines)
+    PROXY_MANAGER = ProxyManager(PROXY_LINES)
     logger.info(f"Loaded {len(PROXY_MANAGER.proxies)} proxies.")
 
     app = Application.builder().token(BOT_TOKEN).concurrent_updates(False).build()
