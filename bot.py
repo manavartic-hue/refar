@@ -1,213 +1,395 @@
-import asyncio
-import aiohttp
-import re
 import os
+import re
+import asyncio
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from urllib.parse import urlparse, parse_qs, unquote
+
+import aiohttp
+from dotenv import load_dotenv
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    filters,
     CallbackQueryHandler,
     ContextTypes,
+    filters,
 )
 
-# ─── Logging ────────────────────────────────────────────────────────────────
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+SCAN_COUNT = 20
+REQUEST_TIMEOUT = 20
+DELAY_BETWEEN_REQUESTS = 0.8
+
 logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
 logger = logging.getLogger(__name__)
 
-# ─── Config ─────────────────────────────────────────────────────────────────
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable is not set!")
-
-# In-memory session store  {user_id: {"url": str}}
-user_states: dict[int, dict] = {}
-
-# Batch size – how many requests fire concurrently at once
-BATCH_SIZE = 10
-
-# Regex patterns to pull a phone number out of a WhatsApp redirect URL
-WA_PATTERNS = [
-    re.compile(r"wa\.me/(\d+)"),
-    re.compile(r"whatsapp\.com/send\?phone=(\d+)"),
-    re.compile(r"api\.whatsapp\.com/send\?phone=(\d+)"),
-    re.compile(r"whatsapp://send\?phone=(\d+)"),
-]
-
-COUNT_OPTIONS = [20, 40, 60, 80, 100]
+active_scans = {}
 
 
-# ─── Helpers ────────────────────────────────────────────────────────────────
-def extract_from_text(text: str) -> str | None:
-    for pat in WA_PATTERNS:
-        m = pat.search(text)
-        if m:
-            return m.group(1)
-    return None
+def is_valid_url(text: str) -> bool:
+    try:
+        parsed = urlparse(text.strip())
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    except Exception:
+        return False
 
 
-async def fetch_one(session: aiohttp.ClientSession, url: str) -> str | None:
+def normalize_number(raw: str) -> str | None:
+    if not raw:
+        return None
+
+    number = re.sub(r"[^\d+]", "", raw.strip())
+
+    if number.startswith("00"):
+        number = "+" + number[2:]
+
+    digits_only = re.sub(r"\D", "", number)
+
+    if len(digits_only) < 8 or len(digits_only) > 15:
+        return None
+
+    if number.startswith("+"):
+        return "+" + digits_only
+
+    return digits_only
+
+
+def extract_numbers_from_text(text: str) -> list[str]:
+    found = set()
+
+    patterns = [
+        r"wa\.me/(\+?\d{8,15})",
+        r"whatsapp\.com/send\?[^\"'\s<>]*phone=(\+?\d{8,15})",
+        r"web\.whatsapp\.com/send\?[^\"'\s<>]*phone=(\+?\d{8,15})",
+        r"api\.whatsapp\.com/send\?[^\"'\s<>]*phone=(\+?\d{8,15})",
+        r"phone=(\+?\d{8,15})",
+    ]
+
+    for pattern in patterns:
+        matches = re.findall(pattern, text, flags=re.IGNORECASE)
+        for match in matches:
+            number = normalize_number(unquote(match))
+            if number:
+                found.add(number)
+
+    possible_numbers = re.findall(r"(?:\+?\d[\d\s().-]{7,20}\d)", text)
+    for item in possible_numbers:
+        number = normalize_number(item)
+        if number:
+            found.add(number)
+
+    return sorted(found)
+
+
+def extract_numbers_from_url(url: str) -> list[str]:
+    found = set()
+
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+
+    for key in ["phone", "number", "mobile", "wa", "whatsapp"]:
+        if key in query:
+            for value in query[key]:
+                number = normalize_number(value)
+                if number:
+                    found.add(number)
+
+    url_text_numbers = extract_numbers_from_text(url)
+    for number in url_text_numbers:
+        found.add(number)
+
+    return sorted(found)
+
+
+async def fetch_once(session: aiohttp.ClientSession, url: str) -> dict:
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "Mozilla/5.0 (Linux; Android 12; Mobile) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0 Safari/537.36"
+            "Chrome/120.0 Mobile Safari/537.36"
         ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     }
+
+    result = {
+        "final_url": None,
+        "status": None,
+        "numbers": [],
+        "error": None,
+    }
+
     try:
         async with session.get(
             url,
-            allow_redirects=True,
-            timeout=aiohttp.ClientTimeout(total=15),
             headers=headers,
-        ) as resp:
-            # 1. Try final redirect URL
-            number = extract_from_text(str(resp.url))
-            if number:
-                return number
-            # 2. Try response body (some pages do JS redirects or embed the link)
-            body = await resp.text(errors="ignore")
-            return extract_from_text(body)
+            allow_redirects=True,
+            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+        ) as response:
+            result["status"] = response.status
+            result["final_url"] = str(response.url)
+
+            content_type = response.headers.get("content-type", "")
+            body = ""
+
+            if "text" in content_type or "html" in content_type or "json" in content_type:
+                body = await response.text(errors="ignore")
+
+            numbers = set()
+
+            for number in extract_numbers_from_url(str(response.url)):
+                numbers.add(number)
+
+            for number in extract_numbers_from_text(body):
+                numbers.add(number)
+
+            result["numbers"] = sorted(numbers)
+
     except Exception as exc:
-        logger.warning("Fetch error: %s", exc)
-        return None
+        result["error"] = str(exc)
+
+    return result
 
 
-async def run_fetches(url: str, count: int) -> list[str]:
-    results: list[str] = []
-    connector = aiohttp.TCPConnector(ssl=False, limit=BATCH_SIZE)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        for start in range(0, count, BATCH_SIZE):
-            batch = min(BATCH_SIZE, count - start)
-            tasks = [fetch_one(session, url) for _ in range(batch)]
-            chunk = await asyncio.gather(*tasks)
-            results.extend(r for r in chunk if r)
-            await asyncio.sleep(0.3)  # small pause between batches
-    return results
-
-
-def build_count_keyboard() -> InlineKeyboardMarkup:
-    row1 = [InlineKeyboardButton(f"🔁 {n}x", callback_data=f"count_{n}") for n in COUNT_OPTIONS[:3]]
-    row2 = [InlineKeyboardButton(f"🔁 {n}x", callback_data=f"count_{n}") for n in COUNT_OPTIONS[3:]]
-    return InlineKeyboardMarkup([row1, row2])
-
-
-def format_results(numbers: list[str], count: int) -> str:
-    unique = list(dict.fromkeys(numbers))  # preserve order, remove duplicates
-    lines = [
-        f"✅ *Done! Fetched {count}x*",
-        f"📞 Unique numbers found: *{len(unique)}*",
-        f"📊 Total hits: *{len(numbers)}*\n",
+def main_menu() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton("🔍 Start Scanning", callback_data="start_scan"),
+            InlineKeyboardButton("⛔ Stop Scanning", callback_data="stop_scan"),
+        ],
+        [
+            InlineKeyboardButton("📋 Help", callback_data="help"),
+        ],
     ]
-    for i, num in enumerate(unique, 1):
-        lines.append(f"`{i}. +{num}`")
-    return "\n".join(lines)
+
+    return InlineKeyboardMarkup(keyboard)
 
 
-# ─── Handlers ───────────────────────────────────────────────────────────────
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def scanning_menu() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton("⛔ Stop Scanning", callback_data="stop_scan"),
+        ]
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.clear()
+
     text = (
-        "🤖 *WhatsApp Redirect Number Extractor*\n\n"
-        "Send me a *rotating WhatsApp redirect link* and I will:\n"
-        "• Fetch it multiple times\n"
-        "• Follow every redirect automatically\n"
-        "• Collect all unique WhatsApp numbers\n\n"
-        "📌 Just paste your link below to get started!"
+        "👋 <b>WhatsApp Number Scanner Bot</b>\n\n"
+        "Send me a redirect link.\n\n"
+        "I will scan it <b>20 times</b> and extract WhatsApp numbers from redirects or page content.\n\n"
+        "Use the buttons below."
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_menu(),
+    )
 
 
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def help_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
-        "ℹ️ *How to use this bot:*\n\n"
-        "1️⃣ Send a URL that redirects to WhatsApp\n"
-        "2️⃣ Choose how many times to fetch (20 – 100)\n"
-        "3️⃣ Wait for results — all unique numbers appear below\n\n"
-        "Supported redirect targets:\n"
-        "• `wa.me/<number>`\n"
-        "• `api.whatsapp.com/send?phone=<number>`\n"
-        "• `whatsapp.com/send?phone=<number>`"
+        "📋 <b>How to use</b>\n\n"
+        "1. Send a link that redirects to WhatsApp.\n"
+        "2. Press <b>Start Scanning</b>.\n"
+        "3. The bot will open the link 20 times.\n"
+        "4. It will show unique WhatsApp numbers line by line.\n\n"
+        "Supported formats:\n"
+        "• wa.me/919999999999\n"
+        "• api.whatsapp.com/send?phone=919999999999\n"
+        "• web.whatsapp.com/send?phone=919999999999\n\n"
+        "Note: JavaScript-only redirects, CAPTCHA, login pages, or blocked websites may not work."
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
 
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = update.message.text.strip()
-    user_id = update.effective_user.id
-
-    if text.startswith("http://") or text.startswith("https://"):
-        user_states[user_id] = {"url": text}
-        await update.message.reply_text(
-            f"✅ *Link saved!*\n\n`{text}`\n\n🔢 *How many times should I fetch it?*",
-            parse_mode="Markdown",
-            reply_markup=build_count_keyboard(),
+    if update.callback_query:
+        await update.callback_query.message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu(),
         )
     else:
         await update.message.reply_text(
-            "⚠️ Please send a valid URL starting with `http://` or `https://`",
-            parse_mode="Markdown",
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu(),
         )
 
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = update.message.text.strip()
+
+    if not is_valid_url(text):
+        await update.message.reply_text(
+            "❌ Please send a valid link starting with http:// or https://",
+            reply_markup=main_menu(),
+        )
+        return
+
+    context.user_data["scan_url"] = text
+
+    await update.message.reply_text(
+        "✅ Link saved.\n\nPress <b>Start Scanning</b> to scan it 20 times.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_menu(),
+    )
+
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
 
     user_id = query.from_user.id
+    data = query.data
 
-    if not query.data.startswith("count_"):
+    if data == "help":
+        await help_message(update, context)
         return
 
-    count = int(query.data.split("_")[1])
+    if data == "stop_scan":
+        task = active_scans.get(user_id)
 
-    if user_id not in user_states:
-        await query.message.reply_text(
-            "❌ Session expired. Please send your link again."
-        )
+        if task and not task.done():
+            task.cancel()
+            await query.message.reply_text(
+                "⛔ Scanning stopped.",
+                reply_markup=main_menu(),
+            )
+        else:
+            await query.message.reply_text(
+                "No active scan is running.",
+                reply_markup=main_menu(),
+            )
         return
 
-    url = user_states[user_id]["url"]
+    if data == "start_scan":
+        scan_url = context.user_data.get("scan_url")
 
-    await query.message.edit_text(
-        f"⏳ *Fetching {count}x* — please wait…\n\n"
-        f"🔗 `{url}`",
-        parse_mode="Markdown",
+        if not scan_url:
+            await query.message.reply_text(
+                "Please send a link first.",
+                reply_markup=main_menu(),
+            )
+            return
+
+        existing_task = active_scans.get(user_id)
+
+        if existing_task and not existing_task.done():
+            await query.message.reply_text(
+                "A scan is already running. Stop it first if you want to start again.",
+                reply_markup=scanning_menu(),
+            )
+            return
+
+        task = asyncio.create_task(run_scan(query.message, context, user_id, scan_url))
+        active_scans[user_id] = task
+
+
+async def run_scan(message, context: ContextTypes.DEFAULT_TYPE, user_id: int, url: str) -> None:
+    unique_numbers = []
+    unique_set = set()
+    errors = 0
+
+    progress_message = await message.reply_text(
+        f"🔍 Scanning started...\n\nTotal scans: {SCAN_COUNT}\nFound: 0",
+        reply_markup=scanning_menu(),
     )
 
-    numbers = await run_fetches(url, count)
+    try:
+        async with aiohttp.ClientSession() as session:
+            for i in range(1, SCAN_COUNT + 1):
+                task = active_scans.get(user_id)
 
-    if numbers:
-        result = format_results(numbers, count)
-        # Telegram limit: 4096 chars
-        if len(result) > 4000:
-            result = result[:3950] + "\n\n_…list truncated (too many numbers)_"
-        await query.message.edit_text(result, parse_mode="Markdown")
-    else:
-        await query.message.edit_text(
-            "❌ *No WhatsApp numbers found.*\n\n"
-            "Make sure the link redirects to a WhatsApp URL.\n"
-            "Try sending the link again with /start",
-            parse_mode="Markdown",
+                if task and task.cancelled():
+                    break
+
+                result = await fetch_once(session, url)
+
+                if result.get("error"):
+                    errors += 1
+
+                for number in result.get("numbers", []):
+                    if number not in unique_set:
+                        unique_set.add(number)
+                        unique_numbers.append(number)
+
+                await progress_message.edit_text(
+                    f"🔍 Scanning...\n\n"
+                    f"Completed: {i}/{SCAN_COUNT}\n"
+                    f"Unique numbers found: {len(unique_numbers)}\n"
+                    f"Errors: {errors}",
+                    reply_markup=scanning_menu(),
+                )
+
+                await asyncio.sleep(DELAY_BETWEEN_REQUESTS)
+
+        if unique_numbers:
+            numbers_text = "\n".join(
+                [f"{index + 1}. <code>{number}</code>" for index, number in enumerate(unique_numbers)]
+            )
+
+            await message.reply_text(
+                f"✅ <b>Scan complete</b>\n\n"
+                f"Total scans: {SCAN_COUNT}\n"
+                f"Unique numbers found: {len(unique_numbers)}\n\n"
+                f"{numbers_text}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(),
+            )
+        else:
+            await message.reply_text(
+                "⚠️ Scan complete, but no WhatsApp numbers were found.\n\n"
+                "The link may use JavaScript redirect, CAPTCHA, login protection, or may not expose the number directly.",
+                reply_markup=main_menu(),
+            )
+
+    except asyncio.CancelledError:
+        await message.reply_text(
+            "⛔ Scanning stopped.",
+            reply_markup=main_menu(),
         )
 
+    except Exception as exc:
+        logger.exception("Scan failed")
 
-# ─── Main ───────────────────────────────────────────────────────────────────
+        await message.reply_text(
+            f"❌ Scan failed:\n{str(exc)}",
+            reply_markup=main_menu(),
+        )
+
+    finally:
+        active_scans.pop(user_id, None)
+
+
 def main() -> None:
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN is missing. Add it in Railway Variables.")
+
     app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_message))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_link))
 
-    logger.info("Bot is running…")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling()
 
 
 if __name__ == "__main__":
