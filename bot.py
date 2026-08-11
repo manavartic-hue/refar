@@ -58,8 +58,6 @@ requirements.txt:
     aiosqlite>=0.19
 """
 
-# Build: fix pack applied — bottom reply keyboard, gate "Joined" button,
-# editable number-pool texts, editor edit/pagination fixes.
 import asyncio
 import csv
 import io
@@ -847,6 +845,7 @@ async def init_db() -> None:
             "ALTER TABLE users ADD COLUMN captcha_answer TEXT",
             "ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN menu_kb_shown INTEGER NOT NULL DEFAULT 0",
         ):
             try:
                 await db.execute(sql)
@@ -1021,6 +1020,10 @@ async def mark_joined_gate(user_id: int) -> None:
 
 async def unmark_joined_gate(user_id: int) -> None:
     await _set_flag(user_id, "joined_gate", 0)
+
+
+async def mark_menu_kb_shown(user_id: int) -> None:
+    await _set_flag(user_id, "menu_kb_shown", 1)
 
 
 async def mark_reward_sent(user_id: int) -> None:
@@ -1351,6 +1354,12 @@ async def add_reward_numbers(raw_numbers: list[str]) -> tuple[int, int]:
 async def delete_reward_number(number_id: int) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM reward_numbers WHERE id = ?", (number_id,))
+        await db.commit()
+
+
+async def update_reward_number(number_id: int, new_number: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE reward_numbers SET number = ? WHERE id = ?", (new_number, number_id))
         await db.commit()
 
 
@@ -1887,96 +1896,6 @@ def fmt_uptime(seconds: float) -> str:
     seconds=max(0,int(seconds)); d,r=divmod(seconds,86400); h,r=divmod(r,3600); m,s=divmod(r,60)
     return f"{d}d {h}h {m}m {s}s" if d else f"{h}h {m}m {s}s"
 
-UI_MESSAGES.update({
-    # --- चैनल गेट ---
-    "gate_not_joined": (
-        "❌ अभी वेरिफाई नहीं हुआ।\n\n"
-        "इन चैनल्स को जॉइन करो, फिर ✅ Joined दबाओ:\n{channels}"
-    ),
-    "gate_verified": "✅ चैनल वेरिफिकेशन पूरा! आगे बढ़ रहे हैं…",
-
-    # --- नंबर पूल (📞 Manage Numbers) — अब एडिटेबल ---
-    "numbers_panel": (
-        "📞 <b>REWARD NUMBER POOL</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "📦 Pool में नंबर: <b>{total}</b>\n"
-        "🎁 अब तक बाँटे गए: <b>{used}</b>\n"
-        "♻️ बची कैपेसिटी: <b>{remaining}</b>\n"
-        "👥 एक नंबर पर मैक्स: <b>{per}</b> यूज़र\n\n"
-        "किसी नंबर पर टैप करो तो वो डिलीट हो जाएगा। ब्रैकेट में दिख रहा नंबर "
-        "बताता है कि वो कितने यूज़र्स को मिल चुका है।"
-    ),
-    "numbers_add_prompt": (
-        "➕ <b>नंबर जोड़ो</b>\n\n"
-        "एक मैसेज में नंबर भेजो — एक लाइन में एक, या कॉमा से अलग।\n"
-        "उदाहरण:\n<code>9876543210\n+91 98765 43211</code>\n\n"
-        "छोड़ने के लिए /cancel"
-    ),
-    "numbers_added": "✅ <b>{added}</b> नंबर जुड़े • <b>{skipped}</b> स्किप (डुप्लिकेट/ग़लत फ़ॉर्मैट)",
-    "numbers_cleared": "🗑 पूरा नंबर पूल क्लियर कर दिया गया।",
-    "numbers_deleted": "❌ नंबर हटा दिया गया।",
-
-    # --- नीचे वाले परमानेंट कीबोर्ड के जवाब ---
-    "menu_hint": "⌨️ नीचे मेन्यू ऑन हो गया है — किसी भी बटन को दबाओ।",
-    "menu_refer_text": (
-        "🔗 <b>तुम्हारा रेफरल लिंक</b>\n\n"
-        "<code>{referral_link}</code>\n\n"
-        "👥 अब तक: <b>{count}</b> / {required}\n"
-        "🎁 रिवॉर्ड अनलॉक होने के लिए बाक़ी: <b>{remaining}</b>"
-    ),
-    "menu_stats_text": (
-        "📊 <b>तुम्हारा स्टेटस</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "👤 {first_name}\n"
-        "🤝 रेफरल: <b>{count}</b> / {required}\n"
-        "🎁 मिले रिवॉर्ड: <b>{reward_count}</b>\n"
-        "📱 आख़िरी रिवॉर्ड: <b>{latest_reward}</b>"
-    ),
-    "menu_registrations_text": (
-        "📋 <b>तुम्हारे रेफर किए यूज़र्स</b> ({total})\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n{rows}"
-    ),
-    "menu_registrations_empty": "📋 अभी तुमने किसी को रेफर नहीं किया है।",
-    "menu_reward_empty": "🎁 अभी कोई रिवॉर्ड नहीं मिला है। पहले {remaining} रेफरल पूरे करो।",
-    "menu_reward_text": "🎁 <b>तुम्हारे रिवॉर्ड</b>\n━━━━━━━━━━━━━━━━━━━━\n\n{rows}",
-    "menu_support_text": "🆘 <b>सपोर्ट</b>\n\nकोई दिक़्क़त हो तो नीचे बटन से एडमिन को मैसेज करो।",
-})
-
-UI_BUTTONS.update({
-    "joined_check": "✅ Joined",
-    "menu_refer": "🔗 Refer & Earn",
-    "menu_stats": "📊 Stats",
-    "menu_reward": "🎁 My Reward",
-    "menu_registrations": "📋 My Referrals",
-    "menu_help": "❓ Help",
-    "menu_support": "🆘 Support",
-})
-
-
-async def safe_edit(message: Message, text: str, kb: InlineKeyboardMarkup | None = None) -> Message:
-    """टेक्स्ट/कैप्शन दोनों पर काम करता है; न हो पाए तो पुराना डिलीट कर नया भेजता है।"""
-    try:
-        if message.text is not None:
-            return await message.edit_text(text, reply_markup=kb)
-        if message.caption is not None and len(text) <= 1024:
-            return await message.edit_caption(caption=text, reply_markup=kb)
-    except TelegramBadRequest as exc:
-        if "message is not modified" in str(exc).lower():
-            try:
-                if kb is not None:
-                    await message.edit_reply_markup(reply_markup=kb)
-            except Exception:
-                pass
-            return message
-    except Exception:
-        logger.exception("safe_edit failed, falling back to resend")
-    try:
-        await message.delete()
-    except Exception:
-        pass
-    return await message.answer(text, reply_markup=kb)
-
-
 # ---------------------------------------------------------------------------
 # Keyboards
 # ---------------------------------------------------------------------------
@@ -1995,43 +1914,15 @@ async def phone_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=await ui_button("share_number"), request_contact=True)]], resize_keyboard=True, one_time_keyboard=True)
 
 
-
-async def user_menu_keyboard() -> ReplyKeyboardMarkup:
-    rows = [
-        [KeyboardButton(text=await ui_button("menu_refer", "🔗 Refer & Earn")),
-         KeyboardButton(text=await ui_button("menu_stats", "📊 Stats"))],
-        [KeyboardButton(text=await ui_button("menu_registrations", "📋 My Referrals")),
-         KeyboardButton(text=await ui_button("menu_reward", "🎁 My Reward"))],
-        [KeyboardButton(text=await ui_button("menu_help", "❓ Help")),
-         KeyboardButton(text=await ui_button("menu_support", "🆘 Support"))],
-    ]
+def persistent_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Always-visible bottom keyboard shown once a user reaches the dashboard."""
     return ReplyKeyboardMarkup(
-        keyboard=rows,
+        keyboard=[
+            [KeyboardButton(text="🔗 Refer & Earn"), KeyboardButton(text="📊 Status")],
+            [KeyboardButton(text="🎁 My Reward"), KeyboardButton(text="❓ Help")],
+        ],
         resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="Choose an action…",
     )
-
-
-async def ensure_user_menu(bot: Bot, chat_id: int, user_id: int, force: bool = False) -> None:
-    """कीबोर्ड सिर्फ़ तभी भेजता है जब यूज़र के पास लेटेस्ट वर्शन न हो।
-    एडमिन जब बटन का नाम बदलेगा तो वर्शन बढ़ेगा और सबको नया कीबोर्ड मिलेगा।"""
-    version = await get_setting("menu_kb_version", "1")
-    if not force and await get_setting(f"menu_kb:{user_id}", "") == version:
-        return
-    try:
-        await bot.send_message(chat_id, await ui_message("menu_hint"), reply_markup=await user_menu_keyboard())
-        await set_setting(f"menu_kb:{user_id}", version)
-    except Exception:
-        logger.exception("menu keyboard send failed for %s", user_id)
-
-
-def _row_get(row, key: str, default=""):
-    try:
-        value = row[key]
-    except Exception:
-        return default
-    return default if value is None else value
 
 
 def gate_keyboard(channels: list[aiosqlite.Row], join_label: str = "") -> InlineKeyboardMarkup:
@@ -2043,16 +1934,19 @@ def gate_keyboard(channels: list[aiosqlite.Row], join_label: str = "") -> Inline
     return InlineKeyboardMarkup(inline_keyboard=_rows_of_two(join_buttons))
 
 
-
 async def build_gate_keyboard(bot: Bot, user_id: int, channels: list[aiosqlite.Row]) -> InlineKeyboardMarkup:
+    """Render the required channel buttons plus a manual "I've Joined" check.
+
+    Telegram chat/member updates verify membership automatically for anyone who
+    joins AFTER this screen is shown. A user who already joined earlier never
+    fires that event, so without a manual re-check they would be stuck here
+    forever — this button covers exactly that case.
+    """
     rows = [
         [InlineKeyboardButton(text=f"📢 {ch['title']}", url=ch['invite_link'])]
         for ch in channels
     ]
-    rows.append([InlineKeyboardButton(
-        text=await ui_button("joined_check", "✅ Joined"),
-        callback_data="gate_check",
-    )])
+    rows.append([InlineKeyboardButton(text="✅ I've Joined / Done", callback_data="gate_check")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -2243,26 +2137,30 @@ def build_channels_list(channels: list[aiosqlite.Row]) -> tuple[str, InlineKeybo
     return f"📢 <b>Manage Channels</b>\n\n{body}", InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-
 async def build_numbers_list() -> tuple[str, InlineKeyboardMarkup]:
     numbers = await get_reward_numbers()
     total, remaining, used = await pool_stats()
-    remove_buttons = [
-        InlineKeyboardButton(
-            text=f"❌ {pretty_number(n['number'])} ({n['handout_count']})",
-            callback_data=f"num_del:{n['id']}",
-        )
-        for n in numbers[:40]
+    rows = [
+        [
+            InlineKeyboardButton(text=f"✏️ {pretty_number(n['number'])} ({n['handout_count']})", callback_data=f"num_edit:{n['id']}"),
+            InlineKeyboardButton(text="❌", callback_data=f"num_del:{n['id']}"),
+        ]
+        for n in numbers[:40]  # keep the keyboard within Telegram limits
     ]
-    rows = _rows_of_two(remove_buttons)
     rows.append([
         InlineKeyboardButton(text="➕ Add Numbers", callback_data="num_add"),
         InlineKeyboardButton(text="🗑 Clear All", callback_data="num_clear"),
     ])
     rows.append([InlineKeyboardButton(text="⬅️ Back", callback_data="adm_back")])
-    text = await ui_message(
-        "numbers_panel",
-        total=total, used=used, remaining=remaining, per=MAX_USERS_PER_NUMBER,
+
+    text = (
+        "📞 <b>Reward Number Pool</b>\n\n"
+        f"📦 Numbers in pool: <b>{total}</b>\n"
+        f"🎁 Handouts done: <b>{used}</b>\n"
+        f"♻️ Capacity left: <b>{remaining}</b> "
+        f"(each number → max {MAX_USERS_PER_NUMBER} users)\n\n"
+        "Tap ✏️ to edit a number, or ❌ to delete it. The count in brackets is "
+        "how many users already received it."
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -2395,6 +2293,24 @@ async def render_gate(bot: Bot, chat_id: int, edit_message: Optional[Message] = 
     await set_flow_message(user_id,chat_id,msg.message_id,STEP_GATE)
 
 
+@user_router.callback_query(F.data == "gate_check")
+async def cb_gate_check(callback: CallbackQuery, bot: Bot) -> None:
+    """Manual re-check for users who had already joined the channel(s) before
+    ever starting the bot, so Telegram never sent a join event for them."""
+    user_id = callback.from_user.id
+    user = await get_user(user_id)
+    if user is None:
+        await callback.answer(); return
+    result = await _evaluate_required_channels(bot, user_id)
+    if result.get("all_member"):
+        await mark_joined_gate(user_id)
+        await maybe_credit_referral(user_id, bot)
+        await callback.answer("✅ Verified!")
+        await render_flow(bot, callback.message.chat.id, user_id, edit_message=callback.message)
+    else:
+        await callback.answer("❌ You haven't joined all the required channels yet.", show_alert=True)
+
+
 async def render_captcha(bot: Bot, chat_id: int, user_id: int, edit_message: Optional[Message] = None) -> None:
     question,answer,options=build_captcha(); await set_captcha_answer(user_id,str(answer))
     text=await ui_message("captcha",question=question); kb=captcha_keyboard(options)
@@ -2410,7 +2326,6 @@ async def render_captcha(bot: Bot, chat_id: int, user_id: int, edit_message: Opt
     await delete_previous_flow(bot,user_id,chat_id); msg=await bot.send_message(chat_id,text,reply_markup=kb); await set_flow_message(user_id,chat_id,msg.message_id,STEP_CAPTCHA)
 
 async def render_phone(bot: Bot, chat_id: int, user_id: int, edit_message: Optional[Message] = None) -> None:
-    await set_setting(f"menu_kb:{user_id}", "")
     await delete_previous_flow(bot,user_id,chat_id)
     text=await ui_message("phone",share_button=await ui_button("share_number"))
     msg=await bot.send_message(chat_id,text,reply_markup=await phone_keyboard())
@@ -2420,7 +2335,6 @@ async def render_contact_admin(bot: Bot, chat_id: int) -> None:
     await bot.send_message(chat_id,await ui_message("restricted"),reply_markup=await contact_admin_keyboard())
 
 async def render_main_menu(bot: Bot, chat_id: int, user_id: int, edit_message: Optional[Message] = None) -> None:
-    await ensure_user_menu(bot, chat_id, user_id)
     user=await get_user(user_id); required=await get_required_referrals(); count=user["referral_count"] if user else 0
     latest=await latest_reward(user_id); rcount=await reward_count(user_id)
     reward_status="Delivered" if rcount else f"{max(0,required-count)} referrals to unlock"
@@ -2429,6 +2343,12 @@ async def render_main_menu(bot: Bot, chat_id: int, user_id: int, edit_message: O
     text=await ui_message("main_locked",**name)
     if count>=required: text=await ui_message("main_unlocked",**name)
     kb=await main_menu_keyboard(True)
+    if user and not user["menu_kb_shown"]:
+        try:
+            await bot.send_message(chat_id, "📋 Use the menu below any time.", reply_markup=persistent_menu_keyboard())
+            await mark_menu_kb_shown(user_id)
+        except Exception:
+            pass
     # Keep exactly one active flow message. Banner support is retained but the dashboard is a single text message.
     if edit_message:
         try: await edit_message.edit_text(text,reply_markup=kb); await set_flow_message(user_id,chat_id,edit_message.message_id,STEP_DONE); return
@@ -2526,16 +2446,7 @@ async def cmd_start(message: Message, command: CommandObject, bot: Bot) -> None:
         try: await message.answer(await ui_message("start_admin",admin_name=admin_name))
         except Exception: pass
         await render_main_menu(bot,message.chat.id,user_id); return
-
-    step = await next_step(user)
-    if step == STEP_GATE:
-        try:
-            await _evaluate_required_channels(bot, user_id)
-        except Exception:
-            logger.exception("gate pre-check failed for %s", user_id)
-        user = await get_user(user_id)
-    await maybe_credit_referral(user_id, bot)
-    await render_flow(bot, message.chat.id, user_id)
+    await render_flow(bot,message.chat.id,user_id)
 
 
 @user_router.message(Command("help"))
@@ -2728,52 +2639,6 @@ async def _all_required_channels_have_join_signal(user_id: int) -> bool:
     return True
 
 
-_gate_check_at: dict[int, float] = {}
-
-
-@user_router.callback_query(F.data == "gate_check")
-async def cb_gate_check(callback: CallbackQuery, bot: Bot) -> None:
-    user_id = callback.from_user.id
-    user = await get_user(user_id)
-    if user is None:
-        await callback.answer("पहले /start भेजो।", show_alert=True)
-        return
-    if user["banned"] or user["restricted"]:
-        await callback.answer("Access restricted.", show_alert=True)
-        return
-
-    now = datetime.now(timezone.utc).timestamp()
-    if now - _gate_check_at.get(user_id, 0.0) < 3:
-        await callback.answer("⏳ थोड़ा रुको…")
-        return
-    _gate_check_at[user_id] = now
-
-    result = await _evaluate_required_channels(bot, user_id)
-    ok = result["all_member"] or await _all_required_channels_have_join_signal(user_id)
-
-    if ok:
-        await mark_joined_gate(user_id)
-        await callback.answer("✅ Verified")
-        await maybe_credit_referral(user_id, bot)
-        await render_flow(bot, callback.message.chat.id, user_id, edit_message=callback.message)
-        return
-
-    missing = [
-        c["title"]
-        for c in result["channels"]
-        if c["status"] not in {"MEMBER", "REQUESTED", "PENDING_APPROVAL", "APPROVED"}
-    ]
-    if result["errors"] and not missing:
-        # बॉट चैनल में एडमिन नहीं है — यूज़र की ग़लती नहीं, एडमिन को बताओ
-        await callback.answer(
-            "⚠️ चैनल चेक नहीं हो पाया। बॉट को चैनल में एडमिन बनाओ (एडमिन को बताएँ)।",
-            show_alert=True,
-        )
-        return
-    text = await ui_message("gate_not_joined", channels="\n".join(f"• {m}" for m in missing) or "—")
-    await callback.answer(re.sub(r"<[^>]+>", "", text)[:195], show_alert=True)
-
-
 @user_router.chat_join_request()
 async def on_chat_join_request(update: ChatJoinRequest, bot: Bot) -> None:
     user_id=update.from_user.id; channel_id=update.chat.id
@@ -2859,6 +2724,45 @@ async def cb_menu_back(callback: CallbackQuery, bot: Bot) -> None:
     await callback.answer()
 
 
+# --- Persistent bottom-keyboard buttons (mirror the inline dashboard) -------
+
+@user_router.message(F.text == "🔗 Refer & Earn")
+async def kb_referral_link(message: Message, bot: Bot) -> None:
+    user_id=message.from_user.id; user=await get_user(user_id)
+    if not user or not await all_verifications_passed(user):
+        await render_flow(bot, message.chat.id, user_id); return
+    me=await bot.get_me(); link=f"https://t.me/{me.username}?start={user_id}" if me.username else ""
+    required=await get_required_referrals(); count=user["referral_count"]
+    text=await ui_message("referral_link",link=link,referrals=count,required_referrals=required,reward=f"{await get_setting('reward_quantity','1')} Agent Number")
+    share=f"https://t.me/share/url?url={quote(link,safe='')}&text={quote(await ui_message('share_caption'),safe='')}"
+    kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=await ui_button("share_friend","📤 SHARE LINK"),url=share)]])
+    await message.answer(text,reply_markup=kb)
+
+
+@user_router.message(F.text == "📊 Status")
+async def kb_my_stats(message: Message, bot: Bot) -> None:
+    user_id=message.from_user.id; user=await get_user(user_id)
+    if not user or not await all_verifications_passed(user):
+        await render_flow(bot, message.chat.id, user_id); return
+    required=await get_required_referrals(); latest=await latest_reward(user["user_id"]); rc=await reward_count(user["user_id"])
+    text=await ui_message("stats",progress=progress_bar(user["referral_count"],required),count=user["referral_count"],required=required,reward_count=rc,phone="Verified" if user["phone_verified"] else "Not verified",access="Verified" if user["joined_gate"] else "Pending",latest_reward=pretty_number(latest["reward_number"]) if latest else "—")
+    await message.answer(text)
+
+
+@user_router.message(F.text == "🎁 My Reward")
+async def kb_my_reward(message: Message, bot: Bot) -> None:
+    user_id=message.from_user.id; user=await get_user(user_id)
+    if not user or user["banned"] or user["restricted"] or not await all_verifications_passed(user):
+        await message.answer("Access restricted."); return
+    ok=await recover_reward(bot,user_id)
+    await message.answer("🎁 Reward recovered." if ok else "No active reward found.")
+
+
+@user_router.message(F.text == "❓ Help")
+async def kb_help(message: Message) -> None:
+    await message.answer(await ui_message("help"))
+
+
 # ---------------------------------------------------------------------------
 # Admin router
 # ---------------------------------------------------------------------------
@@ -2903,117 +2807,28 @@ async def cb_admin_back(callback: CallbackQuery, state: FSMContext) -> None:
 
 # --- Universal Message & Button Editor --------------------------------------
 
-
-_EDITOR_PAGE = 10
-
-
-def _editor_page_keyboard(keys: list[str], page: int, prefix: str, page_prefix: str) -> InlineKeyboardMarkup:
-    pages = max(1, (len(keys) + _EDITOR_PAGE - 1) // _EDITOR_PAGE)
-    page = max(0, min(page, pages - 1))
-    chunk = keys[page * _EDITOR_PAGE:(page + 1) * _EDITOR_PAGE]
-    rows = [
-        [InlineKeyboardButton(text=f"{key.replace('_', ' ').title()[:30]}", callback_data=f"{prefix}{key}")]
-        for key in chunk
-    ]
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"{page_prefix}{page - 1}"))
-    nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="noop"))
-    if page < pages - 1:
-        nav.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"{page_prefix}{page + 1}"))
-    rows.append(nav)
-    rows.append([InlineKeyboardButton(text="⬅️ Back", callback_data="adm_editor")])
+def _editor_message_keyboard() -> InlineKeyboardMarkup:
+    keys = list(UI_MESSAGES.keys())
+    rows = []
+    for i in range(0, len(keys), 2):
+        row = []
+        for key in keys[i:i+2]:
+            row.append(InlineKeyboardButton(text=f"📝 {key.replace('_',' ').title()[:28]}", callback_data=f"ce_m:{key}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="⬅️ Back", callback_data="adm_back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@admin_router.callback_query(F.data == "noop")
-async def cb_noop(callback: CallbackQuery) -> None:
-    await callback.answer()
-
-
-@admin_router.callback_query(F.data == "ce_messages")
-async def cb_editor_messages(callback: CallbackQuery) -> None:
-    await safe_edit(
-        callback.message,
-        "📝 <b>Message Editor</b>\n\nजो मैसेज बदलना है उस पर टैप करो, फिर नया टेक्स्ट भेजो।\n"
-        "💎 प्रीमियम/कस्टम इमोजी सीधे भेजो — वैसे ही सेव होंगे।",
-        _editor_page_keyboard(list(UI_MESSAGES.keys()), 0, "ce_m:", "ce_mp:"),
-    )
-    await callback.answer()
-
-
-@admin_router.callback_query(F.data.startswith("ce_mp:"))
-async def cb_editor_messages_page(callback: CallbackQuery) -> None:
-    page = int(callback.data.split(":", 1)[1])
-    await safe_edit(
-        callback.message,
-        "📝 <b>Message Editor</b>\n\nजो मैसेज बदलना है उस पर टैप करो, फिर नया टेक्स्ट भेजो।",
-        _editor_page_keyboard(list(UI_MESSAGES.keys()), page, "ce_m:", "ce_mp:"),
-    )
-    await callback.answer()
-
-
-@admin_router.callback_query(F.data == "ce_buttons")
-async def cb_editor_buttons(callback: CallbackQuery) -> None:
-    await safe_edit(
-        callback.message,
-        "🔘 <b>Button Editor</b>\n\nबटन चुनो और नया लेबल भेजो।\n"
-        "बटन में सिर्फ़ नॉर्मल इमोजी चलते हैं (Telegram की लिमिट)।",
-        _editor_page_keyboard(list(UI_BUTTONS.keys()), 0, "ce_b:", "ce_bp:"),
-    )
-    await callback.answer()
-
-
-@admin_router.callback_query(F.data.startswith("ce_bp:"))
-async def cb_editor_buttons_page(callback: CallbackQuery) -> None:
-    page = int(callback.data.split(":", 1)[1])
-    await safe_edit(
-        callback.message,
-        "🔘 <b>Button Editor</b>\n\nबटन चुनो और नया लेबल भेजो।",
-        _editor_page_keyboard(list(UI_BUTTONS.keys()), page, "ce_b:", "ce_bp:"),
-    )
-    await callback.answer()
-
-
-@admin_router.callback_query(F.data.startswith("ce_m:"))
-async def cb_choose_message(callback: CallbackQuery, state: FSMContext) -> None:
-    key = callback.data.split(":", 1)[1]
-    if key not in UI_MESSAGES:
-        await callback.answer("Unknown message.", show_alert=True)
-        return
-    try:
-        current = await ui_message(key, **(await user_context(callback.from_user.id)))
-    except Exception:
-        # टेम्पलेट में ऐसा वेरिएबल है जो प्रीव्यू में नहीं मिलता — रॉ टेक्स्ट दिखाओ
-        current = await get_setting(f"ui_msg:{key}", UI_MESSAGES.get(key, ""))
-    await state.update_data(ui_key=key)
-    await state.set_state(AdminStates.waiting_ui_message)
-    await safe_edit(
-        callback.message,
-        f"📝 <b>Edit: {hesc(key.replace('_', ' ').title())}</b>\n\n"
-        f"<b>अभी का टेक्स्ट:</b>\n\n{current}\n\n"
-        "नया मैसेज अब भेजो। HTML और प्रीमियम इमोजी चलेंगे।\n"
-        "छोड़ने के लिए /cancel",
-        await cancel_keyboard("ce_messages"),
-    )
-    await callback.answer()
-
-
-@admin_router.callback_query(F.data.startswith("ce_b:"))
-async def cb_choose_button(callback: CallbackQuery, state: FSMContext) -> None:
-    key = callback.data.split(":", 1)[1]
-    if key not in UI_BUTTONS:
-        await callback.answer("Unknown button.", show_alert=True)
-        return
-    await state.update_data(ui_key=key)
-    await state.set_state(AdminStates.waiting_ui_button)
-    await safe_edit(
-        callback.message,
-        f"🔘 <b>Edit Button: {hesc(key.replace('_', ' ').title())}</b>\n\n"
-        f"अभी: <b>{hesc(await ui_button(key))}</b>\n\nनया लेबल भेजो।",
-        await cancel_keyboard("ce_buttons"),
-    )
-    await callback.answer()
+def _editor_button_keyboard() -> InlineKeyboardMarkup:
+    keys = list(UI_BUTTONS.keys())
+    rows = []
+    for i in range(0, len(keys), 2):
+        row = []
+        for key in keys[i:i+2]:
+            row.append(InlineKeyboardButton(text=f"🔘 {key.replace('_',' ').title()[:28]}", callback_data=f"ce_b:{key}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="⬅️ Back", callback_data="adm_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @admin_router.callback_query(F.data == "adm_editor")
@@ -3095,6 +2910,45 @@ async def cb_ui_preview_gate(callback: CallbackQuery, bot: Bot) -> None:
     await render_gate(bot, callback.message.chat.id, edit_message=callback.message)
     await callback.answer("Preview")
 
+@admin_router.callback_query(F.data == "ce_messages")
+async def cb_editor_messages(callback: CallbackQuery) -> None:
+    await callback.message.edit_text(
+        "📝 <b>Message Editor</b>\n\nTap any message below, then send your new version.\n\n"
+        "💎 Send premium/custom emoji directly from Telegram and they will be stored with their entities.",
+        reply_markup=_editor_message_keyboard()
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "ce_buttons")
+async def cb_editor_buttons(callback: CallbackQuery) -> None:
+    await callback.message.edit_text(
+        "🔘 <b>Button Editor</b>\n\nTap a button to change its visible label.\n\n"
+        "✨ Use normal Unicode emoji in buttons. Premium/custom emoji entities cannot be embedded in Telegram inline-keyboard button labels.",
+        reply_markup=_editor_button_keyboard()
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("ce_m:"))
+async def cb_choose_message(callback: CallbackQuery, state: FSMContext) -> None:
+    key = callback.data.split(":", 1)[1]
+    if key not in UI_MESSAGES:
+        await callback.answer("Unknown message.", show_alert=True)
+        return
+    current = await ui_message(key, **(await user_context(callback.from_user.id)))
+    await state.update_data(ui_key=key)
+    await state.set_state(AdminStates.waiting_ui_message)
+    await callback.message.edit_text(
+        f"📝 <b>Edit: {hesc(key.replace('_',' ').title())}</b>\n\n"
+        f"<b>Current preview:</b>\n\n{current}\n\n"
+        "Send the new message now. You can use HTML formatting and Telegram premium/custom emoji.\n"
+        "Use /cancel to leave without changing it.",
+        reply_markup=await cancel_keyboard("ce_messages")
+    )
+    await callback.answer()
+
+
 @admin_router.message(AdminStates.waiting_ui_message)
 async def process_ui_message(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
@@ -3118,6 +2972,24 @@ async def process_ui_message(message: Message, state: FSMContext) -> None:
     await message.answer(await ui_message("message_saved"), reply_markup=await admin_panel_keyboard(message.from_user.id))
 
 
+@admin_router.callback_query(F.data.startswith("ce_b:"))
+async def cb_choose_button(callback: CallbackQuery, state: FSMContext) -> None:
+    key = callback.data.split(":", 1)[1]
+    if key not in UI_BUTTONS:
+        await callback.answer("Unknown button.", show_alert=True)
+        return
+    current = await ui_button(key)
+    await state.update_data(ui_key=key)
+    await state.set_state(AdminStates.waiting_ui_button)
+    await callback.message.edit_text(
+        f"🔘 <b>Edit Button: {hesc(key.replace('_',' ').title())}</b>\n\n"
+        f"Current: <b>{hesc(current)}</b>\n\nSend the new visible button label.\n"
+        "Use normal Unicode emoji; premium/custom emoji entities are not supported by Telegram button labels.",
+        reply_markup=await cancel_keyboard("ce_buttons")
+    )
+    await callback.answer()
+
+
 @admin_router.message(AdminStates.waiting_ui_button)
 async def process_ui_button(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
@@ -3133,14 +3005,8 @@ async def process_ui_button(message: Message, state: FSMContext) -> None:
     old_value=await ui_button(key)
     await save_ui_button(key, value)
     await audit(message.from_user.id,"CHANGE_BUTTON",details=key,before=old_value,after=value)
-
-    if key.startswith("menu_"):
-        try:
-            await set_setting("menu_kb_version", str(int(await get_setting("menu_kb_version", "1")) + 1))
-        except Exception:
-            await set_setting("menu_kb_version", "2")
     await state.clear()
-    await message.answer(await ui_message("button_saved"), reply_markup=await admin_panel_keyboard(message.from_user.id))
+    await message.answer(await ui_message("button_saved"), reply_markup=await admin_panel_keyboard())
 
 
 # --- Stats -----------------------------------------------------------------
@@ -3452,54 +3318,87 @@ async def cb_banner_preview(callback: CallbackQuery) -> None:
 async def cb_admin_numbers(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     text, kb = await build_numbers_list()
-    await safe_edit(callback.message, text, kb)
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 
 @admin_router.callback_query(F.data == "num_add")
-async def cb_numbers_add(callback: CallbackQuery, state: FSMContext) -> None:
+async def cb_num_add(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminStates.waiting_numbers)
-    await safe_edit(callback.message, await ui_message("numbers_add_prompt"), await cancel_keyboard("adm_numbers"))
+    await callback.message.edit_text(
+        "➕ <b>Add reward numbers (bulk)</b>\n\n"
+        "Send one or many numbers — any format works, the bot auto-detects and "
+        "cleans each one:\n"
+        "<code>+91 98765 43210</code>, <code>9876543210</code>, "
+        "<code>0091-9876543210</code> …\n\n"
+        "Separate them by new lines, commas, or semicolons. Spaces/dashes inside "
+        "a number are also detected automatically. Only valid Indian mobile numbers "
+        f"are saved. Each number can be handed to up to {MAX_USERS_PER_NUMBER} users.",
+        reply_markup=await cancel_keyboard("adm_numbers"),
+    )
     await callback.answer()
 
 
 @admin_router.message(AdminStates.waiting_numbers)
 async def process_numbers(message: Message, state: FSMContext) -> None:
-    raw = (message.text or message.caption or "")
-    candidates = [p for p in re.split(r"[\s,;]+", raw) if p.strip()]
-    if not candidates:
-        await message.answer("❌ कोई नंबर नहीं मिला। दोबारा भेजो या /cancel।")
+    raw = message.text or ""
+    parts = extract_phone_candidates(raw)
+    if not parts:
+        await message.answer(
+            "❌ No valid Indian numbers found. You can paste +91, 0091, 91, "
+            "0-prefix, spaces, dashes, brackets, commas, or one per line."
+        )
         return
-    added, skipped = await add_reward_numbers(candidates)
-    await audit(message.from_user.id, "ADD_NUMBERS", details=f"added={added} skipped={skipped}")
+    data = await state.get_data()
+    edit_number_id = data.get("edit_number_id")
+    if edit_number_id:
+        await update_reward_number(edit_number_id, parts[0])
+        await state.clear()
+        await message.answer(f"✅ Number updated to <b>{pretty_number(parts[0])}</b>.")
+        text, kb = await build_numbers_list()
+        await message.answer(text, reply_markup=kb)
+        return
+    added, skipped = await add_reward_numbers(parts)
     await state.clear()
-    await message.answer(await ui_message("numbers_added", added=added, skipped=skipped))
+    await message.answer(
+        f"✅ Added <b>{added}</b> number(s).\n"
+        f"↩️ Skipped <b>{skipped}</b> (duplicates or invalid).",
+    )
     text, kb = await build_numbers_list()
     await message.answer(text, reply_markup=kb)
 
 
+@admin_router.callback_query(F.data.startswith("num_edit:"))
+async def cb_num_edit(callback: CallbackQuery, state: FSMContext) -> None:
+    number_id = int(callback.data.split(":", 1)[1])
+    await state.update_data(edit_number_id=number_id)
+    await state.set_state(AdminStates.waiting_numbers)
+    await callback.message.edit_text(
+        "✏️ <b>Edit this number</b>\n\n"
+        "Send the new Indian mobile number to replace it with.",
+        reply_markup=await cancel_keyboard("adm_numbers"),
+    )
+    await callback.answer()
+
+
 @admin_router.callback_query(F.data.startswith("num_del:"))
-async def cb_numbers_delete(callback: CallbackQuery) -> None:
-    try:
-        number_id = int(callback.data.split(":", 1)[1])
-    except ValueError:
-        await callback.answer("Invalid id.", show_alert=True)
-        return
+async def cb_num_del(callback: CallbackQuery) -> None:
+    number_id = int(callback.data.split(":", 1)[1])
     await delete_reward_number(number_id)
-    await audit(callback.from_user.id, "DELETE_NUMBER", details=str(number_id))
-    await callback.answer(re.sub(r"<[^>]+>", "", await ui_message("numbers_deleted"))[:195])
     text, kb = await build_numbers_list()
-    await safe_edit(callback.message, text, kb)
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer("Number deleted.")
 
 
 @admin_router.callback_query(F.data == "num_clear")
-async def cb_numbers_clear(callback: CallbackQuery) -> None:
+async def cb_num_clear(callback: CallbackQuery) -> None:
     await clear_reward_numbers()
-    await audit(callback.from_user.id, "CLEAR_NUMBERS")
-    await callback.answer(re.sub(r"<[^>]+>", "", await ui_message("numbers_cleared"))[:195])
     text, kb = await build_numbers_list()
-    await safe_edit(callback.message, text, kb)
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer("Pool cleared.")
 
+
+# --- Manage channels --------------------------------------------------------
 
 @admin_router.callback_query(F.data == "adm_channels")
 async def cb_admin_channels(callback: CallbackQuery, state: FSMContext) -> None:
@@ -5285,129 +5184,11 @@ async def recover_enabled_clones() -> None:
 # Dispatcher factory
 # ---------------------------------------------------------------------------
 
-menu_router = Router(name="menu")
-
-
-@menu_router.message(F.text & ~F.text.startswith("/"))
-async def on_menu_text(message: Message, bot: Bot, state: FSMContext) -> None:
-    if await state.get_state() is not None:
-        return  # कोई FSM स्टेप चल रहा है — उसे मत छेड़ो
-
-    user_id = message.from_user.id
-    user = await get_user(user_id)
-    if user is None:
-        await message.answer("पहले /start भेजो।")
-        return
-    if user["banned"] and not is_admin(user_id):
-        return
-
-    text = (message.text or "").strip()
-    labels = {
-        "refer": await ui_button("menu_refer", "🔗 Refer & Earn"),
-        "stats": await ui_button("menu_stats", "📊 Stats"),
-        "reward": await ui_button("menu_reward", "🎁 My Reward"),
-        "regs": await ui_button("menu_registrations", "📋 My Referrals"),
-        "help": await ui_button("menu_help", "❓ Help"),
-        "support": await ui_button("menu_support", "🆘 Support"),
-    }
-    action = next((name for name, label in labels.items() if label == text), None)
-    if action is None:
-        return  # आम चैट — कुछ मत करो
-
-    # वेरिफिकेशन अधूरा है? पहले वही स्क्रीन दिखाओ (और गेट दोबारा चेक करो)
-    if not is_admin(user_id) and not await all_verifications_passed(user):
-        if await next_step(user) == STEP_GATE:
-            try:
-                await _evaluate_required_channels(bot, user_id)
-            except Exception:
-                logger.exception("gate re-check failed for %s", user_id)
-            user = await get_user(user_id)
-        if not await all_verifications_passed(user):
-            await render_flow(bot, message.chat.id, user_id)
-            return
-
-    required = await get_required_referrals()
-    count = user["referral_count"] or 0
-    remaining = max(0, required - count)
-
-    if action == "help":
-        await message.answer(await ui_message("help"))
-        return
-
-    if action == "support":
-        await message.answer(await ui_message("menu_support_text"), reply_markup=await contact_admin_keyboard())
-        return
-
-    if action == "refer":
-        me = await bot.get_me()
-        link = f"https://t.me/{me.username}?start={user_id}"
-        share = f"https://t.me/share/url?url={link}"
-        await message.answer(
-            await ui_message("menu_refer_text", referral_link=link, count=count,
-                             required=required, remaining=remaining),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=await ui_button("share_friend", "📤 SHARE LINK"), url=share)
-            ]]),
-        )
-        return
-
-    if action == "stats":
-        latest = await latest_reward(user_id)
-        await message.answer(await ui_message(
-            "menu_stats_text",
-            first_name=hesc(user["first_name"] or "User"),
-            count=count, required=required,
-            reward_count=await reward_count(user_id),
-            latest_reward=pretty_number(latest["reward_number"]) if latest else "—",
-        ))
-        return
-
-    if action == "reward":
-        records = await get_reward_records(user_id, limit=20)
-        if not records:
-            await message.answer(await ui_message("menu_reward_empty", remaining=remaining))
-            return
-        rows = "\n".join(
-            f"📱 <code>{pretty_number(_row_get(r, 'reward_number'))}</code> · {str(_row_get(r, 'created_at'))[:10]}"
-            for r in records
-        )
-        latest = records[0]
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text=await ui_button("open_whatsapp", "💬 Open WhatsApp"),
-            url=_row_get(latest, "wa_link") or wa_link(_row_get(latest, "reward_number")),
-        )]])
-        await message.answer(await ui_message("menu_reward_text", rows=rows), reply_markup=kb)
-        return
-
-    if action == "regs":
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute(
-                "SELECT * FROM users WHERE referred_by=? ORDER BY rowid DESC LIMIT 20", (user_id,)
-            )
-            people = list(await cur.fetchall())
-            cur = await db.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (user_id,))
-            total = (await cur.fetchone())[0]
-        if not people:
-            await message.answer(await ui_message("menu_registrations_empty"))
-            return
-        rows = "\n".join(
-            "{} {}".format(
-                "✅" if _row_get(p, "phone_verified", 0) else "⏳",
-                hesc(str(_row_get(p, "first_name") or _row_get(p, "username") or _row_get(p, "user_id"))),
-            )
-            for p in people
-        )
-        await message.answer(await ui_message("menu_registrations_text", total=total, rows=rows))
-        return
-
-
 def build_dispatcher() -> Dispatcher:
     """Build the aiogram dispatcher and register all application routers."""
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(user_router)
     dp.include_router(admin_router)
-    dp.include_router(menu_router)  # हमेशा सबसे आख़िर में
     return dp
 
 
