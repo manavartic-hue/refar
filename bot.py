@@ -20,7 +20,6 @@ from datetime import datetime, time as dtime
 from typing import Dict, Any, Optional, List
 
 import aiohttp
-from aiohttp_socks import ProxyConnector  # optional – but we'll use HTTP proxies
 from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, Index, func
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
