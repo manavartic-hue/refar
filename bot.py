@@ -12,7 +12,7 @@ import threading
 # --- कॉन्फ़िगरेशन ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "अपना_टोकन_यहाँ_डालें")
 # नीचे अपना Telegram User ID डालें (एडमिन पैनल एक्सेस के लिए)
-ADMIN_IDS = [123456789] # अपनी ID यहाँ डालें!
+ADMIN_IDS = [5888777479] # अपनी ID यहाँ डालें!
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
