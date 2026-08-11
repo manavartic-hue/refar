@@ -1,3 +1,4 @@
-aiogram>=3.4,<4
-aiosqlite>=0.19,<1
-cryptography>=42,<44
+python-telegram-bot[job-queue]==22.5
+aiohttp>=3.9,<4
+SQLAlchemy>=2.0,<3
+qrcode[pil]>=7.4,<9
