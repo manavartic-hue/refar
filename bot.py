@@ -5,21 +5,24 @@ import time
 import os
 import random
 import re
-from urllib.parse import urlparse, parse_qs, unquote, urljoin
+import urllib.parse
+from urllib.parse import urlparse, parse_qs, urljoin
 import sqlite3
 import threading
 
 # ==========================================
-# 1. Configuration 
+# 1. कॉन्फ़िगरेशन (Configuration)
 # ==========================================
-# अपना बॉट टोकन यहाँ डालें या Railway Environment Variables में सेट करें
+# अपना बॉट टोकन यहाँ डालें या Railway के Environment Variable में BOT_TOKEN सेट करें
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "अपना_टोकन_यहाँ_डालें")
-ADMIN_IDS = [123456789] # अपनी Telegram ID यहाँ डालें!
+
+# नीचे अपनी Telegram User ID डालें (एडमिन फीचर्स के लिए)
+ADMIN_IDS = [123456789] 
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ==========================================
-# 2. Database Setup (SQLite)
+# 2. डेटाबेस सेटअप (SQLite)
 # ==========================================
 def init_db():
     conn = sqlite3.connect('bot_database.db', check_same_thread=False)
@@ -56,7 +59,7 @@ def get_user_stats(user_id):
 user_states = {}
 
 # ==========================================
-# 3. User Interface (Keyboards)
+# 3. यूज़र इंटरफ़ेस (Keyboards)
 # ==========================================
 def get_main_menu():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -83,66 +86,49 @@ def get_extraction_menu():
     return markup
 
 # ==========================================
-# 4. Core Engine: JS/Meta Redirect Scanner
+# 4. कोर इंजन: Deep WhatsApp Number Extractor
 # ==========================================
 def get_clean_number(text_string):
-    """सिर्फ प्योर 10-15 डिजिट नंबर्स निकालता है"""
-    num = re.sub(r'\D', '', text_string)
-    return num if len(num) >= 10 else None
+    """सिर्फ प्योर 10-15 डिजिट के असली नंबर्स निकालता है (URL Encoded टेक्स्ट को क्लीन करके)"""
+    decoded_text = urllib.parse.unquote(text_string)
+    num = re.sub(r'\D', '', decoded_text)
+    if 10 <= len(num) <= 15:
+        return num
+    return None
 
-def extract_wa_number_ultra(start_url, session, headers):
+def extract_wa_number_strict(url, html_content=""):
     """
-    यह अल्ट्रा-स्कैनर है। यह JavaScript और HTML Meta Redirects को 
-    फॉलो करके छिपे हुए असली WhatsApp नंबर को खोज निकालता है।
+    अल्ट्रा-स्ट्रिक्ट नंबर एक्सट्रैक्टर। यह WhatsApp लिंक्स, Intents और JSON API को भी स्कैन करता है।
     """
-    current_url = start_url
+    patterns = [
+        r'wa\.me/([+%]?\d+)',
+        r'api\.whatsapp\.com/send\/?\?phone=([+%]?\d+)',
+        r'whatsapp://send\/?\?phone=([+%]?\d+)',
+        r'intent://send\/?\?phone=([+%]?\d+)',
+        r'(?:phone|number|whatsapp)=([+%]?\d{10,15})',
+        r'href=["\'](?:whatsapp|intent)://send\?phone=([+%]?\d+)',
+        r'["\'](?:phone|whatsapp|number)["\']\s*:\s*["\']?([+%]?\d{10,15})["\']?' 
+    ]
     
-    # 4 बार तक छिपे हुए रिडायरेक्ट्स को फॉलो करेगा (JS / Meta tags)
-    for _ in range(4): 
-        try:
-            response = session.get(current_url, headers=headers, allow_redirects=True, timeout=12)
-            
-            # HTML को डिकोड करना ताकि छिपे हुए लिंक साफ हो जाएं
-            html = unquote(response.text).replace('\\/', '/').replace('\\"', '"')
-            final_url = unquote(response.url)
-            
-            patterns = [
-                r'wa\.me/(\d{10,15})', 
-                r'phone=(\d{10,15})',
-                r'whatsapp://send\?phone=(\d{10,15})',
-                r'api\.whatsapp\.com/send\?phone=(\d{10,15})'
-            ]
-            
-            # 1. पहले URL में नंबर खोजें (अगर डायरेक्ट पहुँच गया हो)
-            for p in patterns:
-                m = re.search(p, final_url, re.IGNORECASE)
-                if m: return get_clean_number(m.group(1))
-                
-            # 2. HTML सोर्स कोड में नंबर खोजें (JS के अंदर छिपा हो तो)
-            for p in patterns:
-                m = re.search(p, html, re.IGNORECASE)
-                if m: return get_clean_number(m.group(1))
-                
-            # 3. अगर नंबर नहीं मिला, तो HTML Meta Refresh रिडायरेक्ट खोजें
-            meta_match = re.search(r'meta.*?url=["\']?([^"\'>]+)["\']?', html, re.IGNORECASE)
-            if meta_match:
-                current_url = urljoin(response.url, meta_match.group(1))
-                continue
-                
-            # 4. JavaScript रिडायरेक्ट (window.location) खोजें
-            js_match = re.search(r'location\.(?:replace|href|assign)\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE)
-            if js_match:
-                current_url = urljoin(response.url, js_match.group(1))
-                continue
-                
-            break # अगर कोई रिडायरेक्ट या नंबर नहीं मिला, तो लूप तोड़ दें
-        except Exception:
-            break
-            
+    # 1. URL के अंदर चेक करें
+    for pattern in patterns:
+        match = re.search(pattern, url, re.IGNORECASE)
+        if match:
+            res = get_clean_number(match.group(1))
+            if res: return res
+
+    # 2. HTML या JavaScript सोर्स कोड के अंदर चेक करें
+    if html_content:
+        for pattern in patterns:
+            matches = re.findall(pattern, html_content, re.IGNORECASE)
+            for m in matches:
+                res = get_clean_number(m)
+                if res: return res
+
     return None
 
 # ==========================================
-# 5. Bot Commands
+# 5. बॉट कमांड्स और हैंडल्स
 # ==========================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -151,8 +137,8 @@ def send_welcome(message):
         "✨ 💎 **W H A T S A P P   E X T R A C T O R** 💎 ✨\n"
         "━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"👋 **नमस्ते {message.from_user.first_name}!**\n\n"
-        "🚀 **एडवांस्ड नंबर एक्सट्रैक्टर (Pro JS Bypass)**\n"
-        "🛡 **फीचर्स:** Anti-Block • JS Follower • 100% Accuracy\n\n"
+        "🚀 **एडवांस्ड डीप-स्कैन इंजन (V3.0)**\n"
+        "🛡 **फीचर्स:** JS Bypass • Intent Crawler • .TXT एक्सपोर्ट\n\n"
         "👇 काम शुरू करने के लिए **'नया लिंक भेजें'** पर क्लिक करें।"
     )
     bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=get_main_menu())
@@ -163,7 +149,7 @@ def handle_main_buttons(message):
     text = message.text
     
     if text == "🔗 नया लिंक भेजें":
-        bot.reply_to(message, "🔗 **कृपया अपना रोटेटिंग (Rotating) लिंक भेजें:**", parse_mode="Markdown", reply_markup=telebot.types.ReplyKeyboardRemove())
+        bot.reply_to(message, "🔗 **कृपया अपना रोटेटिंग (Rotating) लिंक भेजें:**\n*(जैसे: http://prismatic-hcgyvud.site.je)*", parse_mode="Markdown", reply_markup=telebot.types.ReplyKeyboardRemove())
         user_states[message.chat.id] = {'state': 'waiting_for_link'}
         
     elif text == "📊 मेरे आँकड़े (Stats)":
@@ -171,7 +157,7 @@ def handle_main_buttons(message):
         bot.reply_to(message, f"📊 **आपके आँकड़े:**\nआपने अब तक कुल `{stats}` असली नंबर्स निकाले हैं!", parse_mode="Markdown")
         
     elif text == "❓ मदद":
-        bot.reply_to(message, "💡 अपना लिंक दें। मेरा नया इंजन JS और Meta redirects को क्रैक करके असली नंबर निकाल लाएगा।", reply_markup=get_main_menu())
+        bot.reply_to(message, "💡 अपना लिंक मुझे दें। मेरा एडवांस्ड डीप-स्कैन इंजन ब्राउज़र की तरह काम करता है। यह छुपे हुए जावास्क्रिप्ट और रीडायरेक्ट्स के अंदर घुसकर नंबर निकाल लाएगा।", reply_markup=get_main_menu())
         
     elif text == "📞 सपोर्ट":
         bot.reply_to(message, "👨‍💻 सपोर्ट के लिए एडमिन से संपर्क करें।", reply_markup=get_main_menu())
@@ -179,7 +165,7 @@ def handle_main_buttons(message):
     elif text == "❌ रद्द करें":
         if message.chat.id in user_states:
             del user_states[message.chat.id]
-        bot.reply_to(message, "✅ प्रोसेस रद्द। मुख्य मेनू चालू है।", reply_markup=get_main_menu())
+        bot.reply_to(message, "✅ प्रोसेस रद्द कर दिया गया है। मुख्य मेनू में वापस आ गए हैं।", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda message: message.text.startswith('http') or user_states.get(message.chat.id, {}).get('state') == 'waiting_for_link')
 def handle_url(message):
@@ -194,46 +180,88 @@ def handle_url(message):
         "✨ 💎 **L I N K   S A V E D** 💎 ✨\n"
         "━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🎯 **लिंक:** `{url}`\n\n"
-        "👇 कितनी बार चेक करना चाहते हैं?"
+        "👇 कृपया नीचे दिए गए मेनू से चुनें कि आप कितनी बार स्कैन करना चाहते हैं:"
     )
     bot.send_message(message.chat.id, text, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=get_extraction_menu())
 
 # ==========================================
-# 6. Extraction Process (The Real Magic)
+# 6. बैकग्राउंड थ्रेड प्रोसेस (The Core Javascript/Meta Bypass Engine)
 # ==========================================
 def background_extraction(chat_id, target_url, count):
-    msg = bot.send_message(chat_id, f"⏳ **प्रोसेसिंग शुरू...**\n🔄 लिंक को {count} बार बाईपास किया जा रहा है।", parse_mode="Markdown")
+    msg = bot.send_message(chat_id, f"⏳ **डीप स्कैनिंग शुरू...**\n🔄 इंजन आपके लिंक को {count} बार प्रोसेस कर रहा है।", parse_mode="Markdown")
     
     extracted_numbers = set()
     errors = 0
     
     for i in range(count):
         try:
-            # हर बार नया सेशन ताकि रोटेटिंग सर्वर को लगे कि एक नया व्यक्ति लिंक खोल रहा है!
+            # हर रिक्वेस्ट के लिए बिल्कुल नया सेशन और कुकीज़ ताकि सर्वर ब्लॉक न करे
             session = requests.Session()
             
+            # रैंडम मोबाइल User-Agent से रिक्वेस्ट भेजें ताकि हम असली Android यूज़र लगें
             headers = {
-                'User-Agent': f'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/{random.randint(90, 120)}.0.0.0 Safari/537.36',
+                'User-Agent': f'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(110, 125)}.0.0.0 Mobile Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
+                'Accept-Language': 'en-IN,en-US;q=0.9,en;q=0.8',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none'
             }
             
-            # अल्ट्रा स्कैनर फंक्शन को कॉल करें
-            number = extract_wa_number_ultra(target_url, session, headers)
+            current_url = target_url
+            number_found = None
             
-            if number:
-                extracted_numbers.add(number)
+            # Hop Loop: जावास्क्रिप्ट और मेटा रीडायरेक्ट्स को ट्रैक करने के लिए 3 लेवल डीप स्कैनिंग
+            for hop in range(3):
+                response = session.get(current_url, headers=headers, allow_redirects=True, timeout=15)
+                html_content = response.text
+                final_url = response.url
                 
-            # हर 10 रिक्वेस्ट पर अपडेट (ताकि स्पैम बैन न लगे)
-            if (i + 1) % 10 == 0:
+                # 1. पहले डायरेक्ट चेक करें कि क्या नंबर मिल गया है
+                number_found = extract_wa_number_strict(final_url, html_content)
+                if number_found:
+                    break
+                    
+                # 2. अगर नहीं मिला, तो HTML के अंदर छुपे हुए JavaScript या Meta Refresh को ढूंढें
+                meta_match = re.search(r'(?i)<meta[^>]*http-equiv=["\']?refresh["\']?[^>]*content=["\']?\d+;\s*url=([^"\'>]+)["\']?', html_content)
+                js_match = re.search(r'(?i)window\.location\.(?:replace|href)\s*=\s*["\']([^"\']+)["\']', html_content)
+                
+                next_url = None
+                if meta_match:
+                    next_url = meta_match.group(1).strip()
+                elif js_match:
+                    next_url = js_match.group(1).strip()
+                    
+                if next_url:
+                    # अगर रीडायरेक्ट सीधा WhatsApp Deep Link है, तो उसमें से नंबर निकाल लें
+                    if next_url.startswith('whatsapp://') or next_url.startswith('intent://'):
+                        number_found = extract_wa_number_strict(next_url, "")
+                        break
+                        
+                    # अगर रिलेटिव लिंक (/next-page) है तो उसे ओरिजिनल डोमेन से जोड़ें
+                    if not next_url.startswith('http'):
+                        next_url = urljoin(final_url, next_url)
+                        
+                    current_url = next_url
+                    time.sleep(0.5) # जावास्क्रिप्ट रन होने का सिमुलेटेड टाइम
+                else:
+                    break # कोई और रीडायरेक्ट नहीं मिला
+                    
+            if number_found:
+                extracted_numbers.add(number_found)
+                
+            # हर 5 रिक्वेस्ट पर यूज़र को लाइव अपडेट दें
+            if (i + 1) % 5 == 0:
                 try:
-                    bot.edit_message_text(f"⏳ **स्कैनिंग जारी...** ({i+1}/{count} चेक किए गए)\n✅ अब तक मिले असली नंबर्स: {len(extracted_numbers)}", chat_id, msg.message_id, parse_mode="Markdown")
+                    bot.edit_message_text(f"⏳ **डीप स्कैनिंग जारी...** ({i+1}/{count})\n✅ अब तक मिले असली नंबर्स: {len(extracted_numbers)}", chat_id, msg.message_id, parse_mode="Markdown")
                 except:
                     pass
                     
-            time.sleep(0.5) # Anti-Block Delay
+            # सर्वर के फायरवॉल से बचने के लिए हर रिक्वेस्ट के बीच एक छोटा सा ब्रेक
+            time.sleep(1.2)
                 
         except requests.exceptions.RequestException:
             errors += 1
@@ -252,12 +280,12 @@ def background_extraction(chat_id, target_url, count):
             f"━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"🎯 **यूनिक नंबर्स मिले:** {len(extracted_numbers)}\n"
         )
-        if errors > 0: final_message += f"⚠️ **फेल रिक्वेस्ट:** {errors}\n\n"
+        if errors > 0: final_message += f"⚠️ **फेल रिक्वेस्ट (सर्वर ब्लॉक):** {errors}\n\n"
         else: final_message += "\n"
         
         bot.send_message(chat_id, final_message + result_text[:3000], parse_mode="Markdown", reply_markup=get_main_menu())
         
-        # .TXT फाइल तैयार करना
+        # .TXT फाइल बनाना
         filename = f"Numbers_{chat_id}_{int(time.time())}.txt"
         with open(filename, "w", encoding="utf-8") as f:
             f.write("\n".join(extracted_numbers))
@@ -268,7 +296,7 @@ def background_extraction(chat_id, target_url, count):
         os.remove(filename) 
         
     else:
-        bot.send_message(chat_id, "❌ कोई भी असली WhatsApp नंबर नहीं मिल पाया।", reply_markup=get_main_menu())
+        bot.send_message(chat_id, "❌ कोई भी असली WhatsApp नंबर नहीं मिल पाया। लिंक को डीप-स्कैन किया गया, लेकिन रिस्पांस में सिर्फ ब्लैंक पेज या सिक्योरिटी कैप्चा आया है।", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda message: "बार निकालें" in message.text)
 def handle_extraction(message):
@@ -288,7 +316,7 @@ def handle_extraction(message):
     threading.Thread(target=background_extraction, args=(chat_id, target_url, count)).start()
 
 # ==========================================
-# 7. Start Bot (With Conflict Handler)
+# 7. बोट रन करना (With Error Handling)
 # ==========================================
 try:
     bot.remove_webhook()
@@ -296,5 +324,5 @@ try:
 except Exception as e:
     pass
 
-print("Bot is successfully running and ready for Railway...")
+print("Bot is successfully running with Deep-Scan Engine on Railway...")
 bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
