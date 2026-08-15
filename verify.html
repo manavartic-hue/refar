@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050509">
+  <title>Secure Session Verification</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root { color-scheme: dark; --bg:#050509; --card:#0b0b14; --line:#272650; --violet:#766bff; --cyan:#12bbeb; --green:#00c98b; --muted:#8b8a98; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:radial-gradient(circle at 50% 0,#10102a 0,#050509 42%); color:#f7f7fb; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    .page { width:min(100%,530px); margin:0 auto; padding:26px 18px 42px; }
+    .identity { display:flex; align-items:center; gap:12px; padding:17px; border:1px solid #29283b; border-radius:23px; background:linear-gradient(135deg,#11111f,#0a0a13); }
+    .avatar { display:grid; place-items:center; width:54px; height:54px; flex:0 0 54px; border-radius:17px; background:linear-gradient(135deg,#1ce3db,#13bcbb); font-weight:800; font-size:20px; }
+    .who { min-width:0; flex:1; } .who strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:17px; } .who small { color:var(--muted); font-size:13px; }
+    .pill { padding:7px 10px; border:1px solid #453a9d; border-radius:999px; color:#9b91ff; background:#171333; font-size:11px; font-weight:800; letter-spacing:.09em; }
+    .card { margin-top:26px; padding:34px 22px 29px; border:1px solid var(--line); border-radius:31px; background:radial-gradient(circle at 50% 16%,#161530 0,#0b0b15 46%,#07070d 100%); box-shadow:0 0 42px rgba(93,74,255,.14); text-align:center; }
+    .orbit { display:grid; place-items:center; width:132px; height:132px; margin:0 auto 21px; border:2px dashed #39327d; border-radius:50%; animation:spin 9s linear infinite; }
+    .shield { display:grid; place-items:center; width:78px; height:78px; border:1px solid #4c42ac; border-radius:24px; color:#8179ff; font-size:38px; box-shadow:0 0 28px rgba(118,107,255,.25) inset; animation:counter-spin 9s linear infinite; }
+    h1 { margin:0; font-size:25px; letter-spacing:-.03em; } .sub { min-height:22px; margin:10px 0 28px; color:var(--muted); font-size:15px; }
+    .bar-label { display:flex; justify-content:space-between; color:#938aff; font-size:12px; font-weight:800; letter-spacing:.08em; } .track { height:10px; margin:10px 0 24px; border-radius:999px; background:#1c1c29; overflow:hidden; } .bar { width:0; height:100%; border-radius:999px; background:linear-gradient(90deg,var(--violet),var(--cyan),var(--green)); transition:width .38s cubic-bezier(.23,1,.32,1); }
+    .steps { display:grid; gap:12px; text-align:left; } .step { display:flex; align-items:center; gap:13px; padding:15px; border:1px solid #242435; border-radius:18px; background:#0b1017; transition:border-color .2s,background .2s; } .step.active { border-color:#44387f; background:#101023; } .step.done { border-color:#075044; } .mark { display:grid; place-items:center; width:29px; height:29px; flex:0 0 29px; border-radius:50%; color:#777787; background:#20202f; font-size:14px; font-weight:900; } .step.active .mark { color:#928bff; border:2px solid #8279ff; background:transparent; } .step.done .mark { color:#00dc9a; background:#073c33; } .step span { font-size:15px; font-weight:700; }
+    .notice { margin:18px 3px 0; color:#737382; font-size:12px; line-height:1.5; } .error { display:none; margin:17px 0 0; color:#ff9da6; font-size:13px; line-height:1.45; } .error.show { display:block; }
+    .finish { display:none; width:100%; margin-top:22px; padding:16px; border:0; border-radius:20px; color:#002017; background:#00c98b; font-size:15px; font-weight:900; letter-spacing:.06em; } .finish.show { display:block; }
+    @keyframes spin { to { transform:rotate(360deg); } } @keyframes counter-spin { to { transform:rotate(-360deg); } }
+    @media (prefers-reduced-motion:reduce) { .orbit,.shield { animation:none; } .bar { transition:none; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="identity"><div class="avatar" id="avatar">TG</div><div class="who"><strong id="name">Telegram User</strong><small id="identityNote">Secure session verification</small></div><div class="pill" id="pill">VERIFYING</div></section>
+    <section class="card">
+      <div class="orbit"><div class="shield">♢</div></div><h1 id="title">Checking Session</h1><p class="sub" id="subtitle">Preparing secure verification…</p>
+      <div class="bar-label"><span>VERIFYING</span><span id="percent">0%</span></div><div class="track"><div class="bar" id="bar"></div></div>
+      <div class="steps" id="steps"></div><p class="error" id="error"></p><button class="finish" id="finish">✓ CONTINUE TO BOT</button>
+      <p class="notice">This verifies the Telegram session and an anonymous app-storage binding. It never asks for an OTP, UPI PIN, bank password, or payment.</p>
+    </section>
+  </main>
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) { tg.ready(); tg.expand(); }
+    const telegramUser = tg?.initDataUnsafe?.user;
+    if (telegramUser) {
+      document.getElementById('name').textContent = [telegramUser.first_name, telegramUser.last_name].filter(Boolean).join(' ') || 'Telegram User';
+      document.getElementById('identityNote').textContent = 'ID: ' + telegramUser.id;
+      document.getElementById('avatar').textContent = ((telegramUser.first_name || 'T') + (telegramUser.last_name || '')).slice(0,2).toUpperCase();
+    }
+    const labels = ['Session authorization','Secure connection check','Anonymous app binding','Referral security confirmation'];
+    const steps = document.getElementById('steps');
+    labels.forEach((label, index) => { const row=document.createElement('div'); row.className='step'; row.id='step-'+index; row.innerHTML='<div class="mark">'+(index+1)+'</div><span>'+label+'</span>'; steps.appendChild(row); });
+    const bar=document.getElementById('bar'), percent=document.getElementById('percent'), title=document.getElementById('title'), subtitle=document.getElementById('subtitle'), pill=document.getElementById('pill'), error=document.getElementById('error'), finish=document.getElementById('finish');
+    function getBindingId() { const key='referral_security_binding_v1'; let value=localStorage.getItem(key); if (!value || !/^[A-Za-z0-9_-]{32,128}$/.test(value)) { const bytes=new Uint8Array(32); crypto.getRandomValues(bytes); value=btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); localStorage.setItem(key,value); } return value; }
+    async function serverVerify() { if (!tg?.initData) throw new Error('Open this verification page from the Telegram bot.'); const response=await fetch('/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData,bindingId:getBindingId()})}); const data=await response.json().catch(()=>({})); if (!response.ok || data.status!=='verified') throw new Error(data.detail || 'Server verification failed. Please reopen the bot and try again.'); }
+    async function run() { for (let i=0;i<labels.length;i++) { if (i) document.getElementById('step-'+(i-1)).classList.replace('active','done'); document.getElementById('step-'+i).classList.add('active'); const value=Math.round(((i+1)/labels.length)*90); bar.style.width=value+'%'; percent.textContent=value+'%'; subtitle.textContent=labels[i]+'…'; await new Promise(resolve=>setTimeout(resolve,500)); } try { await serverVerify(); document.getElementById('step-'+(labels.length-1)).classList.replace('active','done'); bar.style.width='100%'; percent.textContent='100%'; title.textContent='✓ Verification Complete'; title.style.color='#00d294'; subtitle.textContent='Your Telegram session has been verified.'; pill.textContent='VERIFIED'; pill.style.color='#00d294'; pill.style.borderColor='#006b55'; pill.style.background='#06271f'; finish.classList.add('show'); tg?.sendData(JSON.stringify({status:'verified'})); } catch (err) { title.textContent='Verification not completed'; subtitle.textContent='Please return to the bot and try again.'; error.textContent=err.message || 'Verification failed.'; error.classList.add('show'); pill.textContent='RETRY'; bar.style.width='0'; percent.textContent='0%'; } }
+    finish.addEventListener('click',()=>tg?.close()); setTimeout(run,250);
+  </script>
+</body>
+</html>
